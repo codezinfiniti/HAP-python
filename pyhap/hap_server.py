@@ -59,6 +59,7 @@ class HAP_SERVER_STATUS:
     OPERATION_TIMED_OUT = -70408
     RESOURCE_DOES_NOT_EXIST = -70409
     INVALID_VALUE_IN_REQUEST = -70410
+    INSUFFICIENT_AUTHORIZATION = -70411
 
 
 # Error codes and the like, guessed by packet inspection
@@ -89,6 +90,10 @@ def hap_hkdf(key, salt, info):
         backend=backend,
     )
     return hkdf.derive(key)
+
+
+class TimeoutException(Exception):
+    pass
 
 
 class UnprivilegedRequestException(Exception):
@@ -194,22 +199,29 @@ class HAPServerHandler(BaseHTTPRequestHandler):
             "pre_session_key": pre_session_key
         }
 
-    def _upgrade_to_encrypted(self):
+    def _upgrade_reader_to_encrypted(self):
         """Set encryption for the underlying transport.
 
-        @note: Replaces self.request, self.wfile and self.rfile.
+        Call BEFORE sending the final unencrypted
+        response.
+
+        @note: Replaces self.request and self.rfile.
         """
-        # Important: We must flush before switching to encrypted
-        # as there may still be data in the buffer which will be
-        # lost we switch to encrypted which will result in the
-        # HAP client/controller having to reconnect and try again.
-        self.wfile.flush()
         self.request = self.server.upgrade_to_encrypted(self.client_address,
                                                         self.enc_context["shared_key"])
         # Recreate the file handles over the socket
         # TODO: consider calling super().setup(), although semantically not correct
+        self.rfile = self.request.makefile('rb', self.rbufsize)  # pylint: disable=attribute-defined-outside-init
+
+    def _upgrade_writer_to_encrypted(self):
+        """Set encryption for the underlying transport. Step 2
+
+        Call AFTER sending the final unencrypted
+        response.
+
+        @note: Replaces self.connection and self.wfile
+        """
         self.connection = self.request  # pylint: disable=attribute-defined-outside-init
-        self.rfile = self.connection.makefile('rb', self.rbufsize)  # pylint: disable=attribute-defined-outside-init
         self.wfile = self.connection.makefile('wb')  # pylint: disable=attribute-defined-outside-init
         self.is_encrypted = True
 
@@ -243,6 +255,15 @@ class HAPServerHandler(BaseHTTPRequestHandler):
         #
         self.connection.sendall(b"".join(self._headers_buffer) + b"\r\n" + bytesdata)
         self._headers_buffer = []  # pylint: disable=attribute-defined-outside-init
+        # Important: We must flush before switching to encrypted
+        # as there may still be data in the buffer which will be
+        # lost we switch to encrypted which will result in the
+        # HAP client/controller having to reconnect and try again.
+        #
+        # Additionally if we do not flush after each response iOS
+        # seem to reschedule a request to subscribe over and over
+        # again.
+        self.wfile.flush()
 
     def dispatch(self):
         """Dispatch the request to the appropriate handler method."""
@@ -253,14 +274,20 @@ class HAPServerHandler(BaseHTTPRequestHandler):
         try:
             getattr(self, self.HANDLERS[self.command][path])()
         except NotAllowedInStateException:
-            self.send_response(403)
-            self.end_response(b'')
+            self.send_response_with_status(403, HAP_SERVER_STATUS.INSUFFICIENT_AUTHORIZATION)
         except UnprivilegedRequestException:
-            response = {"status": HAP_SERVER_STATUS.INSUFFICIENT_PRIVILEGES}
-            data = json.dumps(response).encode("utf-8")
-            self.send_response(401)
-            self.send_header("Content-Type", self.JSON_RESPONSE_TYPE)
-            self.end_response(data)
+            self.send_response_with_status(401, HAP_SERVER_STATUS.INSUFFICIENT_PRIVILEGES)
+        except TimeoutException:
+            self.send_response_with_status(500, HAP_SERVER_STATUS.OPERATION_TIMED_OUT)
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Failed to process request for: %s", path)
+            self.send_response_with_status(500, HAP_SERVER_STATUS.SERVICE_COMMUNICATION_FAILURE)
+
+    def send_response_with_status(self, http_code, hap_server_status):
+        """Send a generic HAP status response."""
+        self.send_response(http_code)
+        self.send_header("Content-Type", self.JSON_RESPONSE_TYPE)
+        self.end_response(json.dumps({"status": hap_server_status}).encode("utf-8"))
 
     def handle_pairing(self):
         """Handles arbitrary step of the pairing process."""
@@ -293,7 +320,7 @@ class HAPServerHandler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", self.PAIRING_RESPONSE_TYPE)
-        self.end_response(data, False)
+        self.end_response(data)
 
     def _pairing_two(self, tlv_objects):
         """Obtain the challenge from the client (A) and client's proof that it
@@ -414,8 +441,7 @@ class HAPServerHandler(BaseHTTPRequestHandler):
         should_confirm = self.accessory_handler.pair(client_uuid, client_ltpk)
 
         if not should_confirm:
-            self.send_response(500)
-            self.end_response(b'')
+            self.send_response_with_status(500, HAP_SERVER_STATUS.INVALID_VALUE_IN_REQUEST)
             return
 
         tlv_data = tlv.encode(HAP_TLV_TAGS.SEQUENCE_NUM, b'\x06',
@@ -440,7 +466,7 @@ class HAPServerHandler(BaseHTTPRequestHandler):
         elif sequence == b'\x03':
             self._pair_verify_two(tlv_objects)
         else:
-            raise ValueError
+            raise ValueError("Unknown pairing sequence of %s during pair verify" % (sequence))
 
     def _pair_verify_one(self, tlv_objects):
         """Generate new session key pair and send a proof to the client.
@@ -526,8 +552,9 @@ class HAPServerHandler(BaseHTTPRequestHandler):
         data = tlv.encode(HAP_TLV_TAGS.SEQUENCE_NUM, b'\x04')
         self.send_response(200)
         self.send_header("Content-Type", self.PAIRING_RESPONSE_TYPE)
+        self._upgrade_reader_to_encrypted()
         self.end_response(data)
-        self._upgrade_to_encrypted()
+        self._upgrade_writer_to_encrypted()
         del self.enc_context
 
     def handle_accessories(self):
@@ -593,7 +620,7 @@ class HAPServerHandler(BaseHTTPRequestHandler):
         elif request_type == 4:
             self._handle_remove_pairing(tlv_objects)
         else:
-            raise ValueError
+            raise ValueError("Unknown pairing request type of %s during pair verify" % (request_type))
 
     def _handle_add_pairing(self, tlv_objects):
         """Update client information."""
@@ -604,8 +631,7 @@ class HAPServerHandler(BaseHTTPRequestHandler):
         should_confirm = self.accessory_handler.pair(
             client_uuid, client_public)
         if not should_confirm:
-            self.send_response(500)
-            self.end_response(b'')
+            self.send_response_with_status(500, HAP_SERVER_STATUS.INVALID_VALUE_IN_REQUEST)
             return
 
         data = tlv.encode(HAP_TLV_TAGS.SEQUENCE_NUM, b"\x02")
@@ -688,6 +714,7 @@ class HAPSocket:
         self.curr_in_total = None  # Length of the current incoming block
         self.num_in_recv = None  # Number of bytes received from the incoming block
         self.curr_in_block = None  # Bytes of the current incoming block
+        self.curr_decrypted = b""  # Decrypted buffer
 
     def __getattr__(self, attribute_name):
         """Defer unknown behaviour to the socket"""
@@ -747,18 +774,22 @@ class HAPSocket:
         The received full cipher blocks are decrypted and returned and partial cipher
         blocks are buffered locally.
         """
-        assert not flags and buflen > self.LENGTH_LENGTH
+        assert not flags
 
-        result = b""
-        # Read from the socket until the given amount of bytes is read.
-        while buflen > 1:
+        if buflen == 0:
+            # If the reads get aligned just right, it possible that we
+            # could be asked to read zero bytes. Since we do not want to block
+            # we return an empty bytes string.
+            return b""
+
+        result = self.curr_decrypted
+
+        # If we do not have a partial decrypted block
+        # read the next one
+        while len(result) == 0:
             # If we are not processing a block already, we need to first get the
             # length of the next block, which is the first two bytes before it.
             if self.curr_in_block is None:
-                if buflen < self.LENGTH_LENGTH:
-                    # It may be that we already read some data and we have
-                    # 1 byte left, return whatever we have.
-                    return result
                 # Always wait for a full block to arrive
                 block_length_bytes = self.socket.recv(
                     self.LENGTH_LENGTH, socket.MSG_WAITALL
@@ -768,29 +799,26 @@ class HAPSocket:
                     return b""
                 # Init. info about the block we just started.
                 # Note we are setting the total length to block_length + mac length
-                self.curr_in_total = \
+                self.curr_in_total = (
                     struct.unpack("H", block_length_bytes)[0] + HAP_CRYPTO.TAG_LENGTH
+                )
                 self.num_in_recv = 0
                 self.curr_in_block = b""
-                buflen -= self.LENGTH_LENGTH
             else:
                 # Read as much from the current block as possible.
-                part = self.socket.recv(min(buflen,
-                                            self.curr_in_total - self.num_in_recv))
+                part = self.socket.recv(self.curr_in_total - self.num_in_recv)
                 # Check what is actually received
                 actual_len = len(part)
                 self.curr_in_block += part
-                buflen -= actual_len
                 self.num_in_recv += actual_len
                 if self.num_in_recv == self.curr_in_total:
                     # We read a whole block. Decrypt it and append it to the result.
                     nonce = _pad_tls_nonce(struct.pack("Q", self.in_count))
                     # Note we are removing the mac length from the total length
                     block_length = self.curr_in_total - HAP_CRYPTO.TAG_LENGTH
-                    plaintext = self.in_cipher.decrypt(
-                        nonce, bytes(self.curr_in_block),
-                        struct.pack("H", block_length))
-                    result += plaintext
+                    result = self.in_cipher.decrypt(
+                        nonce, bytes(self.curr_in_block), struct.pack("H", block_length)
+                    )
                     self.in_count += 1
                     self.curr_in_block = None
                     break
@@ -798,6 +826,15 @@ class HAPSocket:
                     # Connection likely dropped
                     return b""
 
+        # The buffer can hold only
+        # part of the decrypted result
+        if buflen < len(result):
+            self.curr_decrypted = result[buflen:]
+            return result[:buflen]
+
+        # The buffer can hold the whole
+        # result
+        self.curr_decrypted = b""
         return result
 
     @_with_out_lock
