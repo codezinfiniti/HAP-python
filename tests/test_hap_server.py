@@ -1,126 +1,151 @@
 """Tests for the HAPServer."""
-from socket import timeout
-from unittest.mock import Mock, MagicMock, patch
+
+import asyncio
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from pyhap import hap_server
-from pyhap.const import __version__
+from pyhap.accessory import Accessory
+from pyhap.accessory_driver import AccessoryDriver
+from pyhap.hap_protocol import HAPServerProtocol
 
 
-@patch("pyhap.hap_server.HAPServer.server_bind", new=MagicMock())
-@patch("pyhap.hap_server.HAPServer.server_activate", new=MagicMock())
-def test_finish_request_pops_socket():
-    """Test that ``finish_request`` always clears the connection after a request."""
-    amock = Mock()
-    client_addr = ("192.168.1.1", 55555)
-    server_addr = ("", 51826)
+@pytest.mark.asyncio
+async def test_we_can_start_stop(driver):
+    """Test we can start and stop."""
+    loop = asyncio.get_event_loop()
+    addr_info = ("0.0.0.0", None)
+    client_1_addr_info = ("1.2.3.4", 44433)
+    client_2_addr_info = ("4.5.6.7", 33444)
 
-    # Positive case: The request is handled
-    server = hap_server.HAPServer(
-        server_addr, amock, handler_type=lambda *args: MagicMock()
+    server = hap_server.HAPServer(addr_info, driver)
+    await server.async_start(loop)
+    server.connections[client_1_addr_info] = MagicMock()
+    server.connections[client_2_addr_info] = MagicMock()
+    server.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_we_can_connect():
+    """Test we can start, connect, and stop."""
+    loop = asyncio.get_event_loop()
+    with patch("pyhap.accessory_driver.AsyncZeroconf"), patch(
+        "pyhap.accessory_driver.AccessoryDriver.persist"
+    ):
+        driver = AccessoryDriver(loop=loop)
+
+    driver.add_accessory(Accessory(driver, "TestAcc"))
+
+    addr_info = ("0.0.0.0", None)
+    server = hap_server.HAPServer(addr_info, driver)
+    await server.async_start(loop)
+    sock = server.server.sockets[0]
+    assert server.connections == {}
+    _, port = sock.getsockname()
+    _, writer = await asyncio.open_connection("127.0.0.1", port)
+    # flush out any call_soon
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert server.connections != {}
+    server.async_stop()
+    writer.close()
+
+
+@pytest.mark.asyncio
+async def test_idle_connection_cleanup():
+    """Test we cleanup idle connections."""
+    loop = asyncio.get_event_loop()
+    addr_info = ("0.0.0.0", None)
+    client_1_addr_info = ("1.2.3.4", 44433)
+
+    with patch.object(hap_server, "IDLE_CONNECTION_CHECK_INTERVAL_SECONDS", 0), patch(
+        "pyhap.accessory_driver.AsyncZeroconf"
+    ), patch("pyhap.accessory_driver.AccessoryDriver.persist"), patch(
+        "pyhap.accessory_driver.AccessoryDriver.load"
+    ):
+        driver = AccessoryDriver(loop=loop)
+        server = hap_server.HAPServer(addr_info, driver)
+        await server.async_start(loop)
+        check_idle = MagicMock()
+        server.connections[client_1_addr_info] = MagicMock(check_idle=check_idle)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert check_idle.called
+        check_idle.reset_mock()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert check_idle.called
+    server.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_push_event(driver):
+    """Test we can create and send an event."""
+    addr_info = ("1.2.3.4", 1234)
+    server = hap_server.HAPServer(("127.0.01", 5555), driver)
+    server.loop = asyncio.get_event_loop()
+    hap_events = []
+
+    def _save_event(hap_event):
+        hap_events.append(hap_event)
+
+    hap_server_protocol = HAPServerProtocol(
+        server.loop, server.connections, server.accessory_handler
+    )
+    hap_server_protocol.write = _save_event
+    hap_server_protocol.peername = addr_info
+    server.accessory_handler.topics["1.33"] = {addr_info}
+    server.accessory_handler.topics["2.33"] = {addr_info}
+    server.accessory_handler.topics["3.33"] = {addr_info}
+
+    assert server.push_event({"aid": 1, "iid": 33, "value": False}, addr_info) is False
+    await asyncio.sleep(0)
+    server.connections[addr_info] = hap_server_protocol
+
+    assert (
+        server.push_event({"aid": 1, "iid": 33, "value": False}, addr_info, True)
+        is True
+    )
+    assert (
+        server.push_event({"aid": 2, "iid": 33, "value": False}, addr_info, True)
+        is True
+    )
+    assert (
+        server.push_event({"aid": 3, "iid": 33, "value": False}, addr_info, True)
+        is True
     )
 
-    server.connections[client_addr] = amock
-    server.finish_request(amock, client_addr)
+    await asyncio.sleep(0)
+    assert hap_events == [
+        b"EVENT/1.0 200 OK\r\nContent-Type: application/hap+json\r\nContent-Length: 120\r\n\r\n"
+        b'{"characteristics":[{"aid":1,"iid":33,"value":false},'
+        b'{"aid":2,"iid":33,"value":false},{"aid":3,"iid":33,"value":false}]}'
+    ]
 
-    assert len(server.connections) == 0
+    hap_events = []
+    assert (
+        server.push_event({"aid": 1, "iid": 33, "value": False}, addr_info, False)
+        is True
+    )
+    assert (
+        server.push_event({"aid": 2, "iid": 33, "value": False}, addr_info, False)
+        is True
+    )
+    assert (
+        server.push_event({"aid": 3, "iid": 33, "value": False}, addr_info, False)
+        is True
+    )
 
-    # Negative case: The request fails with a timeout
-    def raises(*args):
-        raise timeout()
+    await asyncio.sleep(0)
+    assert hap_events == []
 
-    server = hap_server.HAPServer(server_addr, amock, handler_type=raises)
-    server.connections[client_addr] = amock
-    server.finish_request(amock, client_addr)
+    # Ensure that a the event is not sent if its unsubscribed during
+    # the coalesce delay
+    server.accessory_handler.topics["1.33"].remove(addr_info)
 
-    assert len(server.connections) == 0
-
-    # Negative case: The request raises some other exception
-    server = hap_server.HAPServer(server_addr, amock, handler_type=lambda *args: 1 / 0)
-    server.connections[client_addr] = amock
-
-    with pytest.raises(Exception):
-        server.finish_request(amock, client_addr)
-
-    assert len(server.connections) == 0
-
-
-def test_uses_http11():
-    """Test that ``HAPServerHandler`` uses HTTP/1.1."""
-    amock = Mock()
-
-    with patch("pyhap.hap_server.HAPServerHandler.setup"), patch(
-        "pyhap.hap_server.HAPServerHandler.handle_one_request"
-    ), patch("pyhap.hap_server.HAPServerHandler.finish"):
-        handler = hap_server.HAPServerHandler(
-            "mocksock", "mockclient_addr", "mockserver", amock
-        )
-        assert handler.protocol_version == "HTTP/1.1"
-        assert handler.server_version == "pyhap/" + __version__
-
-
-def test_end_response_is_one_send():
-    """Test that ``HAPServerHandler`` sends the whole response at once."""
-
-    class ConnectionMock:
-        sent_bytes = []
-
-        def sendall(self, bytesdata):
-            self.sent_bytes.append([bytesdata])
-            return 1
-
-        def getsent(self):
-            return self.sent_bytes
-
-    amock = Mock()
-
-    with patch("pyhap.hap_server.HAPServerHandler.setup"), patch(
-        "pyhap.hap_server.HAPServerHandler.handle_one_request"
-    ), patch("pyhap.hap_server.HAPServerHandler.finish"):
-        handler = hap_server.HAPServerHandler(
-            "mocksock", "mockclient_addr", "mockserver", amock
-        )
-        handler.request_version = "HTTP/1.1"
-        handler.connection = ConnectionMock()
-        handler.requestline = "GET / HTTP/1.1"
-        handler.send_response(200)
-        handler.wfile = MagicMock()
-        handler.end_response(b"body")
-        assert handler.connection.getsent() == [
-            [b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody"]
-        ]
-        assert handler._headers_buffer == []  # pylint: disable=protected-access
-        assert handler.wfile.called_once()
-
-
-def test_http_204_has_no_content_length():
-    """Test that and HTTP 204 has no content length."""
-
-    class ConnectionMock:
-        sent_bytes = []
-
-        def sendall(self, bytesdata):
-            self.sent_bytes.append([bytesdata])
-            return 1
-
-        def getsent(self):
-            return self.sent_bytes
-
-    amock = Mock()
-
-    with patch("pyhap.hap_server.HAPServerHandler.setup"), patch(
-        "pyhap.hap_server.HAPServerHandler.handle_one_request"
-    ), patch("pyhap.hap_server.HAPServerHandler.finish"):
-        handler = hap_server.HAPServerHandler(
-            "mocksock", "mockclient_addr", "mockserver", amock
-        )
-        handler.request_version = "HTTP/1.1"
-        handler.connection = ConnectionMock()
-        handler.requestline = "PUT / HTTP/1.1"
-        handler.send_response(204)
-        handler.wfile = MagicMock()
-        handler.end_response(b"")
-        assert handler.connection.getsent() == [[b"HTTP/1.1 204 No Content\r\n\r\n"]]
-        assert handler._headers_buffer == []  # pylint: disable=protected-access
-        assert handler.wfile.called_once()
+    await asyncio.sleep(0.55)
+    assert hap_events == [
+        b"EVENT/1.0 200 OK\r\nContent-Type: application/hap+json\r\nContent-Length: 87\r\n\r\n"
+        b'{"characteristics":[{"aid":2,"iid":33,"value":false},{"aid":3,"iid":33,"value":false}]}'
+    ]

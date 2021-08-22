@@ -1,4 +1,4 @@
-[![PyPI version](https://badge.fury.io/py/HAP-python.svg)](https://badge.fury.io/py/HAP-python) [![Build Status](https://travis-ci.org/ikalchev/HAP-python.svg?branch=master)](https://travis-ci.org/ikalchev/HAP-python) [![codecov](https://codecov.io/gh/ikalchev/HAP-python/branch/master/graph/badge.svg)](https://codecov.io/gh/ikalchev/HAP-python) [![Documentation Status](https://readthedocs.org/projects/hap-python/badge/?version=latest)](http://hap-python.readthedocs.io/en/latest/?badge=latest) [![Downloads](https://pepy.tech/badge/hap-python)](https://pepy.tech/project/hap-python)
+[![PyPI version](https://badge.fury.io/py/HAP-python.svg)](https://badge.fury.io/py/HAP-python) [![Build Status](https://github.com/ikalchev/HAP-python/workflows/CI/badge.svg)](https://github.com/ikalchev/HAP-python) [![codecov](https://codecov.io/gh/ikalchev/HAP-python/branch/master/graph/badge.svg)](https://codecov.io/gh/ikalchev/HAP-python) [![Python Versions](https://img.shields.io/pypi/pyversions/HAP-python.svg)](https://pypi.python.org/pypi/HAP-python/) [![Documentation Status](https://readthedocs.org/projects/hap-python/badge/?version=latest)](http://hap-python.readthedocs.io/en/latest/?badge=latest) [![Downloads](https://pepy.tech/badge/hap-python)](https://pepy.tech/project/hap-python)
 # HAP-python
 
 HomeKit Accessory Protocol implementation in python 3.
@@ -33,7 +33,7 @@ in [the accessories folder](accessories). See how to configure your camera in
 
 ## Installation <a name="Installation"></a>
 
-As of version 2.0.0, HAP-python no longer supports python older than 3.5, because we
+As of version 3.5.1, HAP-python no longer supports python older than 3.6, because we
 are moving to asyncio. If your platform does not have a compatible python out of the
 box, you can install it manually or just use an older version of HAP-python.
 

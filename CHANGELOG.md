@@ -16,6 +16,108 @@ Sections
 ### Developers
 -->
 
+## [4.0.0] - 2021-07-22
+
+- Add support for HAP v 1.1. [#365](https://github.com/ikalchev/HAP-python/pull/365)
+
+## [3.6.0] - 2021-07-22
+
+- Reduce event overhead. [#360](https://github.com/ikalchev/HAP-python/pull/360)
+- Ensure floating point values are truncated for int formats. [#361](https://github.com/ikalchev/HAP-python/pull/361)
+- Remove python 3.10 alpha from ci workflow. [#362](https://github.com/ikalchev/HAP-python/pull/362)
+- Protocol 1.1: Add support for prepared writes. [#366](https://github.com/ikalchev/HAP-python/pull/366)
+- Decrease snapshot timeout to avoid being disconnected. [#367](https://github.com/ikalchev/HAP-python/pull/367)
+- Avoid writing delayed camera snapshots when the connection is closed. [#368](https://github.com/ikalchev/HAP-python/pull/368)
+
+## [3.5.2] - 2021-07-22
+
+- Switch from ed25519 to pynacl. [#355](https://github.com/ikalchev/HAP-python/pull/355)
+
+## [3.5.1] - 2021-07-04
+
+# Changed
+- Bumped zeroconf to 0.32. [#351](https://github.com/ikalchev/HAP-python/pull/351)
+
+# Fixed
+- Handle additional cases of invalid hostnames. [#348](https://github.com/ikalchev/HAP-python/pull/348)
+
+# Breaking Changes
+- Python 3.5 is no longer supported. [#354](https://github.com/ikalchev/HAP-python/pull/354)
+
+## [3.5.0] - 2021-05-31
+
+# Changed
+- Add async registration for zeroconf. [#342](https://github.com/ikalchev/HAP-python/pull/342)
+- Reduce payload sizes by adding support for short UUIDs and compact json (~40% reduction). [#345](https://github.com/ikalchev/HAP-python/pull/345)
+
+# Fixed
+- Coalesce events when possible. [#346](https://github.com/ikalchev/HAP-python/pull/346)
+- Remove watcher from Windows. [#343](https://github.com/ikalchev/HAP-python/pull/343)
+
+## [3.4.1] - 2021-03-28
+
+# Fixed
+- Fix `run_at_interval` with multiple accessories. [#335](https://github.com/ikalchev/HAP-python/pull/335)
+- Ensure HTTP 200 status is sent when there are no failures for `get_characteristics`. Improves battery life. [#337](https://github.com/ikalchev/HAP-python/pull/337)
+
+## [3.4.0] - 2021-03-06
+
+### Added
+- Python 3.10 support. [#328](https://github.com/ikalchev/HAP-python/pull/328)
+
+### Fixed
+- Improve connection stability with large responses. [#320](https://github.com/ikalchev/HAP-python/pull/320)
+- Fix `Accessroy.run` not being awaited from a bridge. [#323](https://github.com/ikalchev/HAP-python/pull/323)
+- Clean up event subscriptions on client disconnect. [#324](https://github.com/ikalchev/HAP-python/pull/324)
+
+### Removed
+- Remove legacy python code. [#321](https://github.com/ikalchev/HAP-python/pull/321)
+- Remove deprecated `get_char_loader` and `get_serv_loader`. [#322](https://github.com/ikalchev/HAP-python/pull/322)
+
+### Developers
+- Increase code coverage. [#325](https://github.com/ikalchev/HAP-python/pull/325), [#326](https://github.com/ikalchev/HAP-python/pull/326), [#330](https://github.com/ikalchev/HAP-python/pull/330), [#331](https://github.com/ikalchev/HAP-python/pull/331), [#332](https://github.com/ikalchev/HAP-python/pull/332)
+- Add bandit to CI. [#329](https://github.com/ikalchev/HAP-python/pull/329)
+
+
+## [3.3.2] - 2021-03-01
+
+### Fixed
+- Resolve unavailable condition on restart. [#318](https://github.com/ikalchev/HAP-python/pull/318)
+- Resolve config version overflow. [#318](https://github.com/ikalchev/HAP-python/pull/318)
+
+## [3.3.1] - 2021-02-28
+
+### Changed
+- Implement partial success response for `set_characteristics` (was `BAD_REQUEST` on error). [#316](https://github.com/ikalchev/HAP-python/pull/316) 
+
+## [3.3.0] - 2021-02-13
+
+### Fixed
+- Fix an issue that would cause pairing to fail (implement `list pairings`). [#307](https://github.com/ikalchev/HAP-python/pull/307)
+- Remove unsupported characters from Accessory names. [#310](https://github.com/ikalchev/HAP-python/pull/310)
+- Speed up event subscription for new connections. [#308](https://github.com/ikalchev/HAP-python/pull/308)
+- Properly handle camera snapshots. [#311](https://github.com/ikalchev/HAP-python/pull/311)
+- Properly handle pairing attempt when already paired. [#314](https://github.com/ikalchev/HAP-python/pull/314)
+
+### Changed
+- Use github actions for codecov. [#312](https://github.com/ikalchev/HAP-python/pull/312), [#313](https://github.com/ikalchev/HAP-python/pull/313)
+
+## [3.2.0] - 2021-01-31
+
+### Changed
+- HTTP server is now based on asyncio. [#301](https://github.com/ikalchev/HAP-python/pull/301)
+
+### Fixed
+- Fix a bug in the pairing URL generator. [#303](https://github.com/ikalchev/HAP-python/pull/303)
+
+## [3.1.0] - 2020-12-13
+
+### Fixed
+- Ensure an error response is generated on exception. [#292](https://github.com/ikalchev/HAP-python/pull/292)
+- Improve error reporting during pairing. [#289](https://github.com/ikalchev/HAP-python/pull/289)
+- Handle request for an empty read instead of throwing an exception. [#288](https://github.com/ikalchev/HAP-python/pull/288)
+- Fix thread safety in get characteristics. [#287](https://github.com/ikalchev/HAP-python/pull/287) 
+
 ## [3.0.0] - 2020-07-25
 
 ### Added

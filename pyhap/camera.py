@@ -212,7 +212,6 @@ NO_SRTP = b'\x01\x01\x02\x02\x00\x03\x00'
 
 
 FFMPEG_CMD = (
-    # pylint: disable=bad-continuation
     'ffmpeg -re -f avfoundation -framerate {fps} -i 0:0 -threads 0 '
     '-vcodec libx264 -an -pix_fmt yuv420p -r {fps} -f rawvideo -tune zerolatency '
     '-vf scale={width}:{height} -b:v {v_max_bitrate}k -bufsize {v_max_bitrate}k '
@@ -597,8 +596,6 @@ class Camera(Accessory):
         session_id = UUID(bytes=session_objs[SETUP_TYPES['SESSION_ID']])
 
         session_info = self.sessions.get(session_id)
-        stream_idx = session_info['stream_idx']
-
         if not session_info:
             logger.error(
                 'Requested to stop stream for session %s, but no '
@@ -607,6 +604,7 @@ class Camera(Accessory):
             )
             return
 
+        stream_idx = session_info['stream_idx']
         await self.stop_stream(session_info)
         del self.sessions[session_id]
 

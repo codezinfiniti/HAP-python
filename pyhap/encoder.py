@@ -6,9 +6,10 @@ it can work properly after a restart.
 import json
 import uuid
 
-import ed25519
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from pyhap.util import fromhex, tohex
+from .const import CLIENT_PROP_PERMS
 
 
 class AccessoryEncoder:
@@ -52,14 +53,30 @@ class AccessoryEncoder:
             - UUID and public key of paired clients.
             - Config version.
         """
-        paired_clients = {str(client): tohex(key)
-                          for client, key in state.paired_clients.items()}
+        paired_clients = {
+            str(client): bytes.hex(key) for client, key in state.paired_clients.items()
+        }
+        client_properties = {
+            str(client): props for client, props in state.client_properties.items()
+        }
         config_state = {
-            'mac': state.mac,
-            'config_version': state.config_version,
-            'paired_clients': paired_clients,
-            'private_key': tohex(state.private_key.to_seed()),
-            'public_key': tohex(state.public_key.to_bytes()),
+            "mac": state.mac,
+            "config_version": state.config_version,
+            "paired_clients": paired_clients,
+            "client_properties": client_properties,
+            "private_key": bytes.hex(
+                state.private_key.private_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PrivateFormat.Raw,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            ),
+            "public_key": bytes.hex(
+                state.public_key.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw,
+                )
+            ),
         }
         json.dump(config_state, fp)
 
@@ -70,10 +87,27 @@ class AccessoryEncoder:
         @see: AccessoryEncoder.persist
         """
         loaded = json.load(fp)
-        state.mac = loaded['mac']
-        state.config_version = loaded['config_version']
-        state.paired_clients = {uuid.UUID(client): fromhex(key)
-                                for client, key in
-                                loaded['paired_clients'].items()}
-        state.private_key = ed25519.SigningKey(fromhex(loaded['private_key']))
-        state.public_key = ed25519.VerifyingKey(fromhex(loaded['public_key']))
+        state.mac = loaded["mac"]
+        state.config_version = loaded["config_version"]
+        if "client_properties" in loaded:
+            state.client_properties = {
+                uuid.UUID(client): props
+                for client, props in loaded["client_properties"].items()
+            }
+        else:
+            # If "client_properties" does not exist, everyone
+            # before that was paired as an admin
+            state.client_properties = {
+                uuid.UUID(client): {CLIENT_PROP_PERMS: 1}
+                for client in loaded["paired_clients"]
+            }
+        state.paired_clients = {
+            uuid.UUID(client): bytes.fromhex(key)
+            for client, key in loaded["paired_clients"].items()
+        }
+        state.private_key = ed25519.Ed25519PrivateKey.from_private_bytes(
+            bytes.fromhex(loaded["private_key"])
+        )
+        state.public_key = ed25519.Ed25519PublicKey.from_public_bytes(
+            bytes.fromhex(loaded["public_key"])
+        )

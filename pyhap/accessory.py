@@ -1,17 +1,28 @@
 """Module for the Accessory classes."""
 import itertools
 import logging
-import struct
 
-from pyhap import util, SUPPORT_QR_CODE
+from uuid import UUID
+from pyhap import SUPPORT_QR_CODE, util
 from pyhap.const import (
-    STANDALONE_AID, HAP_REPR_AID, HAP_REPR_IID, HAP_REPR_SERVICES,
-    HAP_REPR_VALUE, CATEGORY_OTHER, CATEGORY_BRIDGE)
+    CATEGORY_BRIDGE,
+    CATEGORY_OTHER,
+    HAP_REPR_AID,
+    HAP_REPR_IID,
+    HAP_PROTOCOL_VERSION,
+    HAP_REPR_SERVICES,
+    HAP_REPR_VALUE,
+    STANDALONE_AID,
+)
 from pyhap.iid_manager import IIDManager
+from pyhap.service import Service
 
 if SUPPORT_QR_CODE:
     import base36
     from pyqrcode import QRCode
+
+
+HAP_PROTOCOL_INFORMATION_SERVICE_UUID = UUID("000000A2-0000-1000-8000-0026BB765291")
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +31,6 @@ class Accessory:
     """A representation of a HAP accessory.
 
     Inherit from this class to build your own accessories.
-
-    At the end of the init of this class, the _set_services method is called.
-    Use this to set your HAP services.
     """
 
     category = CATEGORY_OTHER
@@ -44,28 +52,18 @@ class Accessory:
         self.driver = driver
         self.services = []
         self.iid_manager = IIDManager()
+        self.setter_callback = None
 
         self.add_info_service()
-        self._set_services()
+        if aid == STANDALONE_AID:
+            self.add_protocol_version_service()
 
     def __repr__(self):
         """Return the representation of the accessory."""
         services = [s.display_name for s in self.services]
-        return "<accessory display_name='{}' services={}>" \
-            .format(self.display_name, services)
-
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state['driver'] = None
-        state['run_sentinel'] = None
-        return state
-
-    def _set_services(self):
-        """Set the services for this accessory.
-
-        .. deprecated:: 2.0
-           Initialize the service inside the accessory `init` method instead.
-        """
+        return "<accessory display_name='{}' services={}>".format(
+            self.display_name, services
+        )
 
     @property
     def available(self):
@@ -85,29 +83,40 @@ class Accessory:
         Called in `__init__` to be sure that it is the first service added.
         May be overridden.
         """
-        serv_info = self.driver.loader.get_service('AccessoryInformation')
-        serv_info.configure_char('Name', value=self.display_name)
-        serv_info.configure_char('SerialNumber', value='default')
+        serv_info = self.driver.loader.get_service("AccessoryInformation")
+        serv_info.configure_char("Name", value=self.display_name)
+        serv_info.configure_char("SerialNumber", value="default")
         self.add_service(serv_info)
 
-    def set_info_service(self, firmware_revision=None, manufacturer=None,
-                         model=None, serial_number=None):
+    def add_protocol_version_service(self):
+        """Helper method to add the required HAP Protocol Information service"""
+        serv_hap_proto_info = Service(
+            HAP_PROTOCOL_INFORMATION_SERVICE_UUID, "HAPProtocolInformation"
+        )
+        serv_hap_proto_info.add_characteristic(self.driver.loader.get_char("Version"))
+        serv_hap_proto_info.configure_char("Version", value=HAP_PROTOCOL_VERSION)
+        self.add_service(serv_hap_proto_info)
+
+    def set_info_service(
+        self, firmware_revision=None, manufacturer=None, model=None, serial_number=None
+    ):
         """Quick assign basic accessory information."""
-        serv_info = self.get_service('AccessoryInformation')
+        serv_info = self.get_service("AccessoryInformation")
         if firmware_revision:
-            serv_info.configure_char(
-                'FirmwareRevision', value=firmware_revision)
+            serv_info.configure_char("FirmwareRevision", value=firmware_revision)
         if manufacturer:
-            serv_info.configure_char('Manufacturer', value=manufacturer)
+            serv_info.configure_char("Manufacturer", value=manufacturer)
         if model:
-            serv_info.configure_char('Model', value=model)
-        if serial_number:
+            serv_info.configure_char("Model", value=model)
+        if serial_number is not None:
             if len(serial_number) >= 1:
-                serv_info.configure_char('SerialNumber', value=serial_number)
+                serv_info.configure_char("SerialNumber", value=serial_number)
             else:
                 logger.warning(
                     "Couldn't add SerialNumber for %s. The SerialNumber must "
-                    "be at least one character long.", self.display_name)
+                    "be at least one character long.",
+                    self.display_name,
+                )
 
     def add_preload_service(self, service, chars=None):
         """Create a service with the given name and add it to this acc."""
@@ -123,27 +132,7 @@ class Accessory:
     def set_primary_service(self, primary_service):
         """Set the primary service of the acc."""
         for service in self.services:
-            service.is_primary_service = service.type_id == \
-                primary_service.type_id
-
-    def config_changed(self):
-        """Notify the accessory about configuration changes.
-
-        These include new services or updated characteristic values, e.g.
-        the Name of a service changed.
-
-        This method also notifies the driver about the change, so that it can
-        publish the changes to the world.
-
-        .. note:: If you are changing the configuration of a bridged accessory
-           (i.e. an Accessory that is contained in a Bridge),
-           you should call the `config_changed` method on the Bridge.
-
-        Deprecated. Use `driver.config_changed()` instead.
-        """
-        logger.warning(
-            'This method is now deprecated. Use \'driver.config_changed\' instead.')
-        self.driver.config_changed()
+            service.is_primary_service = service.type_id == primary_service.type_id
 
     def add_service(self, *servs):
         """Add the given services to this Accessory.
@@ -184,24 +173,27 @@ class Accessory:
 
         :rtype: str
         """
-        buffer = bytearray(b'\x00\x00\x00\x00\x00\x00\x00\x00')
+        payload = 0
+        payload |= 0 & 0x7  # version
 
-        value_low = int(self.driver.state.pincode.replace(b'-', b''), 10)
-        value_low |= 1 << 28
-        struct.pack_into('>L', buffer, 4, value_low)
+        payload <<= 4
+        payload |= 0 & 0xF  # reserved bits
 
-        if self.category == CATEGORY_OTHER:
-            buffer[4] = buffer[4] | 1 << 7
+        payload <<= 8
+        payload |= self.category & 0xFF  # category
 
-        value_high = self.category >> 1
-        struct.pack_into('>L', buffer, 0, value_high)
+        payload <<= 4
+        payload |= 2 & 0xF  # flags
 
-        encoded_payload = base36.dumps(
-            struct.unpack_from('>L', buffer, 4)[0] +
-            (struct.unpack_from('>L', buffer, 0)[0] * (1 << 32))).upper()
-        encoded_payload = encoded_payload.rjust(9, '0')
+        payload <<= 27
+        payload |= (
+            int(self.driver.state.pincode.replace(b"-", b""), 10) & 0x7FFFFFFF
+        )  # pincode
 
-        return 'X-HM://' + encoded_payload + self.driver.state.setup_id
+        encoded_payload = base36.dumps(payload).upper()
+        encoded_payload = encoded_payload.rjust(9, "0")
+
+        return "X-HM://" + encoded_payload + self.driver.state.setup_id
 
     def get_characteristic(self, aid, iid):
         """Get the characteristic for the given IID.
@@ -244,17 +236,27 @@ class Accessory:
         pincode = self.driver.state.pincode.decode()
         if SUPPORT_QR_CODE:
             xhm_uri = self.xhm_uri()
-            print('Setup payload: {}'.format(xhm_uri), flush=True)
-            print('Scan this code with your HomeKit app on your iOS device:',
-                  flush=True)
+            print("Setup payload: {}".format(xhm_uri), flush=True)
+            print(
+                "Scan this code with your HomeKit app on your iOS device:", flush=True
+            )
             print(QRCode(xhm_uri).terminal(quiet_zone=2), flush=True)
-            print('Or enter this code in your HomeKit app on your iOS device: '
-                  '{}'.format(pincode), flush=True)
+            print(
+                "Or enter this code in your HomeKit app on your iOS device: "
+                "{}".format(pincode),
+                flush=True,
+            )
         else:
-            print('To use the QR Code feature, use \'pip install '
-                  'HAP-python[QRCode]\'', flush=True)
-            print('Enter this code in your HomeKit app on your iOS device: {}'
-                  .format(pincode), flush=True)
+            print(
+                "To use the QR Code feature, use 'pip install " "HAP-python[QRCode]'",
+                flush=True,
+            )
+            print(
+                "Enter this code in your HomeKit app on your iOS device: {}".format(
+                    pincode
+                ),
+                flush=True,
+            )
 
     @staticmethod
     def run_at_interval(seconds):
@@ -272,14 +274,16 @@ class Accessory:
             Determines the interval on which the decorated method will be called.
         :type seconds: float
         """
+
         def _repeat(func):
             async def _wrapper(self, *args):
                 while True:
                     await self.driver.async_add_job(func, self, *args)
-                    if await util.event_wait(
-                            self.driver.aio_stop_event, seconds):
+                    if await util.event_wait(self.driver.aio_stop_event, seconds):
                         break
+
             return _wrapper
+
         return _repeat
 
     async def run(self):
@@ -297,7 +301,7 @@ class Accessory:
 
     # Driver
 
-    def publish(self, value, sender, sender_client_addr=None):
+    def publish(self, value, sender, sender_client_addr=None, immediate=False):
         """Append AID and IID of the sender and forward it to the driver.
 
         Characteristics call this method to send updates.
@@ -313,7 +317,7 @@ class Accessory:
             HAP_REPR_IID: self.iid_manager.get_iid(sender),
             HAP_REPR_VALUE: value,
         }
-        self.driver.publish(acc_data, sender_client_addr)
+        self.driver.publish(acc_data, sender_client_addr, immediate)
 
 
 class Bridge(Accessory):
@@ -351,8 +355,11 @@ class Bridge(Accessory):
 
         if acc.aid is None:
             # For some reason AID=7 gets unsupported. See issue #61
-            acc.aid = next(aid for aid in itertools.count(2)
-                           if aid != 7 and aid not in self.accessories)
+            acc.aid = next(
+                aid
+                for aid in itertools.count(2)
+                if aid != 7 and aid not in self.accessories
+            )
         elif acc.aid == self.aid or acc.aid in self.accessories:
             raise ValueError("Duplicate AID found when attempting to add accessory")
 
@@ -389,4 +396,4 @@ class Bridge(Accessory):
 
 
 def get_topic(aid, iid):
-    return str(aid) + '.' + str(iid)
+    return str(aid) + "." + str(iid)
