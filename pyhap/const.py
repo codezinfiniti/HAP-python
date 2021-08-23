@@ -1,6 +1,6 @@
 """This module contains constants used by other modules."""
 MAJOR_VERSION = 4
-MINOR_VERSION = 0
+MINOR_VERSION = 1
 PATCH_VERSION = 0
 __short_version__ = "{}.{}".format(MAJOR_VERSION, MINOR_VERSION)
 __version__ = "{}.{}".format(__short_version__, PATCH_VERSION)
@@ -12,7 +12,7 @@ BASE_UUID = "-0000-1000-8000-0026BB765291"
 STANDALONE_AID = 1  # Standalone accessory ID (i.e. not bridged)
 
 # ### Default values ###
-DEFAULT_CONFIG_VERSION = 2
+DEFAULT_CONFIG_VERSION = 1
 DEFAULT_PORT = 51827
 
 # ### Configuration version ###
