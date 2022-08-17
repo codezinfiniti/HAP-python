@@ -199,7 +199,7 @@ def test_service_callbacks(driver):
     mock_callback.assert_called_with({"On": True, "Brightness": 88})
 
     get_chars = driver.get_characteristics(
-        ["{}.{}".format(acc.aid, char_on_iid), "{}.{}".format(acc2.aid, char_on2_iid)]
+        [f"{acc.aid}.{char_on_iid}", f"{acc2.aid}.{char_on2_iid}"]
     )
     assert get_chars == {
         "characteristics": [
@@ -214,10 +214,10 @@ def test_service_callbacks(driver):
     char_brightness.getter_callback = _fail_func
     get_chars = driver.get_characteristics(
         [
-            "{}.{}".format(acc.aid, char_on_iid),
-            "{}.{}".format(acc2.aid, char_on2_iid),
-            "{}.{}".format(acc2.aid, char_brightness_iid),
-            "{}.{}".format(acc.aid, char_brightness2_iid),
+            f"{acc.aid}.{char_on_iid}",
+            f"{acc2.aid}.{char_on2_iid}",
+            f"{acc2.aid}.{char_brightness_iid}",
+            f"{acc.aid}.{char_brightness2_iid}",
         ]
     )
     assert get_chars == {
@@ -839,6 +839,35 @@ def test_mdns_service_info(driver):
     assert mdns_info.type == "_hap._tcp.local."
     assert mdns_info.name == "Test Accessory 000000._hap._tcp.local."
     assert mdns_info.server == "Test-Accessory-000000.local."
+    assert mdns_info.port == port
+    assert mdns_info.addresses == [b"\xac\x00\x00\x01"]
+    assert mdns_info.properties == {
+        "md": "Test Accessory",
+        "pv": "1.1",
+        "id": "00:00:00:00:00:00",
+        "c#": "1",
+        "s#": "1",
+        "ff": "0",
+        "ci": "1",
+        "sf": "1",
+        "sh": "+KjpzQ==",
+    }
+
+
+def test_mdns_service_info_with_specified_server(driver):
+    """Test accessory mdns advert when the server is specified."""
+    acc = Accessory(driver, "Test Accessory")
+    driver.add_accessory(acc)
+    addr = "172.0.0.1"
+    mac = "00:00:00:00:00:00"
+    pin = b"123-45-678"
+    port = 11111
+    state = State(address=addr, mac=mac, pincode=pin, port=port)
+    state.setup_id = "abc"
+    mdns_info = AccessoryMDNSServiceInfo(acc, state, "hap1.local.")
+    assert mdns_info.type == "_hap._tcp.local."
+    assert mdns_info.name == "Test Accessory 000000._hap._tcp.local."
+    assert mdns_info.server == "hap1.local."
     assert mdns_info.port == port
     assert mdns_info.addresses == [b"\xac\x00\x00\x01"]
     assert mdns_info.properties == {

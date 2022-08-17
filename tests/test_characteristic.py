@@ -45,7 +45,7 @@ def test_repr():
     char = get_char(PROPERTIES.copy())
     del char.properties["Permissions"]
     assert (
-        char.__repr__() == "<characteristic display_name=Test Char value=0 "
+        repr(char) == "<characteristic display_name=Test Char value=0 "
         "properties={'Format': 'int'}>"
     )
 
@@ -72,7 +72,7 @@ def test_to_valid_value():
         PROPERTIES.copy(), valid={"foo": 2, "bar": 3}, min_value=2, max_value=7
     )
     with pytest.raises(ValueError):
-        char.to_valid_value(1)
+        char.valid_value_or_raise(1)
     assert char.to_valid_value(2) == 2
 
     del char.properties["ValidValues"]
@@ -104,6 +104,14 @@ def test_override_properties_properties():
     assert char.properties["step"] == new_properties["step"]
 
 
+def test_override_properties_exceed_max_length():
+    """Test if overriding the properties with invalid values throws."""
+    new_properties = {"minValue": 10, "maxValue": 20, "step": 1, "maxLen": 5000}
+    char = get_char(PROPERTIES.copy(), min_value=0, max_value=1)
+    with pytest.raises(ValueError):
+        char.override_properties(properties=new_properties)
+
+
 def test_override_properties_valid_values():
     """Test if overriding the properties works for valid values."""
     new_valid_values = {"foo2": 2, "bar2": 3}
@@ -117,6 +125,89 @@ def test_override_properties_error():
     char = get_char(PROPERTIES.copy())
     with pytest.raises(ValueError):
         char.override_properties()
+
+
+@pytest.mark.parametrize("int_format", HAP_FORMAT_INTS)
+def test_set_value_invalid_min_step(int_format):
+    """Test setting the value of a characteristic that is outside the minStep."""
+    path = "pyhap.characteristic.Characteristic.notify"
+    props = PROPERTIES.copy()
+    props["Format"] = int_format
+    props["minStep"] = 2
+    char = get_char(props, min_value=4, max_value=8)
+
+    with patch(path) as mock_notify:
+        char.set_value(5.55)
+        # Ensure floating point is dropped on an int property
+        # Ensure value is rounded to match minStep
+        assert char.value == 6
+        assert mock_notify.called is False
+
+        char.set_value(6.00)
+        # Ensure floating point is dropped on an int property
+        # Ensure value is rounded to match minStep
+        assert char.value == 6
+        assert mock_notify.called is False
+
+        char.broker = Mock()
+        char.set_value(8, should_notify=False)
+        assert char.value == 8
+        assert mock_notify.called is False
+
+        char.set_value(1)
+        # Ensure value is raised to meet minValue
+        assert char.value == 4
+        assert mock_notify.call_count == 1
+
+        # No change should not generate another notify
+        char.set_value(4)
+        assert char.value == 4
+        assert mock_notify.call_count == 1
+
+
+def test_set_value_invalid_min_float():
+    """Test setting the value of a characteristic that is outside the minStep."""
+    props = PROPERTIES.copy()
+    props["Format"] = HAP_FORMAT_FLOAT
+    props["minStep"] = 0.1
+    char = get_char(props, min_value=0, max_value=26)
+
+    char.set_value(5.55)
+    # Ensure value is rounded to match minStep
+    assert char.value == 5.5
+
+    char.set_value(22.2)
+    # Ensure value is rounded to match minStep
+    assert char.value == 22.2
+
+    char.set_value(22.200000)
+    # Ensure value is rounded to match minStep
+    assert char.value == 22.2
+
+    props = PROPERTIES.copy()
+    props["Format"] = HAP_FORMAT_FLOAT
+    props["minStep"] = 0.00001
+    char = get_char(props, min_value=0, max_value=26)
+
+    char.set_value(5.55)
+    # Ensure value is rounded to match minStep
+    assert char.value == 5.55
+
+    char.set_value(22.2)
+    # Ensure value is rounded to match minStep
+    assert char.value == 22.2
+
+    char.set_value(22.200000)
+    # Ensure value is rounded to match minStep
+    assert char.value == 22.2
+
+    char.set_value(22.12345678)
+    # Ensure value is rounded to match minStep
+    assert char.value == 22.12346
+
+    char.set_value(0)
+    # Ensure value is not modified
+    assert char.value == 0
 
 
 @pytest.mark.parametrize("int_format", HAP_FORMAT_INTS)
@@ -262,6 +353,18 @@ def test_client_update_value():
         assert len(mock_notify.mock_calls) == 3
 
 
+def test_client_update_value_with_invalid_value():
+    """Test updating the characteristic value with call from the driver with invalid values."""
+    char = get_char(PROPERTIES.copy(), valid={"foo": 0, "bar": 2, "baz": 1})
+
+    with patch.object(char, "broker"):
+        with pytest.raises(ValueError):
+            char.client_update_value(4)
+
+        char.allow_invalid_client_values = True
+        char.client_update_value(4)
+
+
 def test_notify():
     """Test if driver is notified correctly about a changed characteristic."""
     char = get_char(PROPERTIES.copy())
@@ -322,13 +425,34 @@ def test_to_HAP_string():
     assert hap_repr["format"] == "string"
     assert "maxLen" not in hap_repr
 
-    char.value = (
+    char.set_value(
         "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffgggggggggg"
     )
     with patch.object(char, "broker"):
         hap_repr = char.to_HAP()
-    assert hap_repr["maxLen"] == 70
-    assert hap_repr["value"] == char.value
+    assert "maxLen" not in hap_repr
+    assert hap_repr["value"] == char.value[:64]
+
+
+def test_to_HAP_string_max_length_override():
+    """Test created HAP representation for strings."""
+    char = get_char(PROPERTIES.copy())
+    char.properties["Format"] = "string"
+    char.properties["maxLen"] = 256
+    char.value = "aaa"
+    with patch.object(char, "broker"):
+        hap_repr = char.to_HAP()
+    assert hap_repr["format"] == "string"
+    assert "maxLen" in hap_repr
+    longer_than_sixty_four = (
+        "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffgggggggggg"
+    )
+
+    char.set_value(longer_than_sixty_four)
+    with patch.object(char, "broker"):
+        hap_repr = char.to_HAP()
+    assert hap_repr["maxLen"] == 256
+    assert hap_repr["value"] == longer_than_sixty_four
 
 
 def test_to_HAP_bool():

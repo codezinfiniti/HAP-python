@@ -63,6 +63,9 @@ HAP_FORMAT_NUMERICS = {
     HAP_FORMAT_UINT64,
 }
 
+DEFAULT_MAX_LENGTH = 64
+ABSOLUTE_MAX_LENGTH = 256
+
 # ### HAP Units ###
 HAP_UNIT_ARC_DEGREE = "arcdegrees"
 HAP_UNIT_CELSIUS = "celsius"
@@ -79,7 +82,7 @@ PROP_PERMISSIONS = "Permissions"
 PROP_UNIT = "unit"
 PROP_VALID_VALUES = "ValidValues"
 
-PROP_NUMERIC = (PROP_MAX_VALUE, PROP_MIN_VALUE, PROP_MIN_STEP, PROP_UNIT)
+PROP_NUMERIC = {PROP_MAX_VALUE, PROP_MIN_VALUE, PROP_MIN_STEP, PROP_UNIT}
 
 CHAR_BUTTON_EVENT = UUID("00000126-0000-1000-8000-0026BB765291")
 CHAR_PROGRAMMABLE_SWITCH_EVENT = UUID("00000073-0000-1000-8000-0026BB765291")
@@ -98,6 +101,15 @@ ALWAYS_NULL = {
 
 class CharacteristicError(Exception):
     """Generic exception class for characteristic errors."""
+
+
+def _validate_properties(properties):
+    """Throw an exception on invalid properties."""
+    if (
+        HAP_REPR_MAX_LEN in properties
+        and properties[HAP_REPR_MAX_LEN] > ABSOLUTE_MAX_LENGTH
+    ):
+        raise ValueError(f"{HAP_REPR_MAX_LEN} may not exceed {ABSOLUTE_MAX_LENGTH}")
 
 
 class Characteristic:
@@ -120,9 +132,12 @@ class Characteristic:
         "service",
         "_uuid_str",
         "_loader_display_name",
+        "allow_invalid_client_values",
     )
 
-    def __init__(self, display_name, type_id, properties):
+    def __init__(
+        self, display_name, type_id, properties, allow_invalid_client_values=False
+    ):
         """Initialise with the given properties.
 
         :param display_name: Name that will be displayed for this
@@ -136,7 +151,17 @@ class Characteristic:
             ValidValues, etc.
         :type properties: dict
         """
+        _validate_properties(properties)
         self.broker = None
+        #
+        # As of iOS 15.1, Siri requests TargetHeatingCoolingState
+        # as Auto reguardless if its a valid value or not.
+        #
+        # Consumers of this api may wish to set allow_invalid_client_values
+        # to True and handle converting the Auto state to Cool or Heat
+        # depending on the device.
+        #
+        self.allow_invalid_client_values = allow_invalid_client_values
         self.display_name = display_name
         self.properties = properties
         self.type_id = type_id
@@ -149,9 +174,7 @@ class Characteristic:
 
     def __repr__(self):
         """Return the representation of the characteristic."""
-        return "<characteristic display_name={} value={} properties={}>".format(
-            self.display_name, self.value, self.properties
-        )
+        return f"<characteristic display_name={self.display_name} value={self.value} properties={self.properties}>"
 
     def _get_default_value(self):
         """Return default value for format."""
@@ -174,26 +197,37 @@ class Characteristic:
             self.value = self.to_valid_value(value=self.getter_callback())
         return self.value
 
+    def valid_value_or_raise(self, value):
+        """Raise ValueError if PROP_VALID_VALUES is set and the value is not present."""
+        if self.type_id in ALWAYS_NULL:
+            return
+        valid_values = self.properties.get(PROP_VALID_VALUES)
+        if not valid_values:
+            return
+        if value in valid_values.values():
+            return
+        error_msg = f"{self.display_name}: value={value} is an invalid value."
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
     def to_valid_value(self, value):
         """Perform validation and conversion to valid value."""
-        if self.properties.get(PROP_VALID_VALUES):
-            if value not in self.properties[PROP_VALID_VALUES].values():
-                error_msg = "{}: value={} is an invalid value.".format(
-                    self.display_name, value
-                )
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-        elif self.properties[PROP_FORMAT] == HAP_FORMAT_STRING:
-            value = str(value)[:256]
+        if self.properties[PROP_FORMAT] == HAP_FORMAT_STRING:
+            value = str(value)[
+                : self.properties.get(HAP_REPR_MAX_LEN, DEFAULT_MAX_LENGTH)
+            ]
         elif self.properties[PROP_FORMAT] == HAP_FORMAT_BOOL:
             value = bool(value)
         elif self.properties[PROP_FORMAT] in HAP_FORMAT_NUMERICS:
             if not isinstance(value, (int, float)):
-                error_msg = "{}: value={} is not a numeric value.".format(
-                    self.display_name, value
+                error_msg = (
+                    f"{self.display_name}: value={value} is not a numeric value."
                 )
                 logger.error(error_msg)
                 raise ValueError(error_msg)
+            min_step = self.properties.get(PROP_MIN_STEP)
+            if value and min_step:
+                value = round(min_step * round(value / min_step), 14)
             value = min(self.properties.get(PROP_MAX_VALUE, value), value)
             value = max(self.properties.get(PROP_MIN_VALUE, value), value)
             if self.properties[PROP_FORMAT] != HAP_FORMAT_FLOAT:
@@ -215,6 +249,7 @@ class Characteristic:
             raise ValueError("No properties or valid_values specified to override.")
 
         if properties:
+            _validate_properties(properties)
             self.properties.update(properties)
 
         if valid_values:
@@ -226,6 +261,7 @@ class Characteristic:
 
         try:
             self.value = self.to_valid_value(self.value)
+            self.valid_value_or_raise(self.value)
         except ValueError:
             self.value = self._get_default_value()
 
@@ -250,6 +286,7 @@ class Characteristic:
         """
         logger.debug("set_value: %s to %s", self.display_name, value)
         value = self.to_valid_value(value)
+        self.valid_value_or_raise(value)
         changed = self.value != value
         self.value = value
         if changed and should_notify and self.broker:
@@ -262,19 +299,26 @@ class Characteristic:
 
         Change self.value to value and call callback.
         """
+        original_value = value
+        if self.type_id not in ALWAYS_NULL or original_value is not None:
+            value = self.to_valid_value(value)
+        if not self.allow_invalid_client_values:
+            self.valid_value_or_raise(value)
         logger.debug(
-            "client_update_value: %s to %s from client: %s",
+            "client_update_value: %s to %s (original: %s) from client: %s",
             self.display_name,
             value,
+            original_value,
             sender_client_addr,
         )
-        changed = self.value != value
+        previous_value = self.value
         self.value = value
-        if changed:
-            self.notify(sender_client_addr)
         if self.setter_callback:
             # pylint: disable=not-callable
             self.setter_callback(value)
+        changed = self.value != previous_value
+        if changed:
+            self.notify(sender_client_addr)
         if self.type_id in ALWAYS_NULL:
             self.value = None
 
@@ -314,7 +358,10 @@ class Characteristic:
         value = self.get_value()
         if self.properties[PROP_FORMAT] in HAP_FORMAT_NUMERICS:
             hap_rep.update(
-                {k: self.properties[k] for k in self.properties.keys() & PROP_NUMERIC}
+                {
+                    k: self.properties[k]
+                    for k in PROP_NUMERIC.intersection(self.properties)
+                }
             )
 
             if PROP_VALID_VALUES in self.properties:
@@ -322,8 +369,9 @@ class Characteristic:
                     self.properties[PROP_VALID_VALUES].values()
                 )
         elif self.properties[PROP_FORMAT] == HAP_FORMAT_STRING:
-            if len(value) > 64:
-                hap_rep[HAP_REPR_MAX_LEN] = min(len(value), 256)
+            max_length = self.properties.get(HAP_REPR_MAX_LEN, DEFAULT_MAX_LENGTH)
+            if max_length != DEFAULT_MAX_LENGTH:
+                hap_rep[HAP_REPR_MAX_LEN] = max_length
         if HAP_PERMISSION_READ in self.properties[PROP_PERMISSIONS]:
             hap_rep[HAP_REPR_VALUE] = value
 

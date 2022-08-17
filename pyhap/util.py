@@ -1,10 +1,11 @@
 import asyncio
 import base64
 import functools
-import json
 import random
 import socket
 from uuid import UUID
+
+import orjson
 
 from .const import BASE_UUID
 
@@ -80,7 +81,7 @@ def generate_mac():
     :return: MAC address in format XX:XX:XX:XX:XX:XX
     :rtype: str
     """
-    return "{}{}:{}{}:{}{}:{}{}:{}{}:{}{}".format(
+    return "{}{}:{}{}:{}{}:{}{}:{}{}:{}{}".format(  # pylint: disable=consider-using-f-string
         *(rand.choice(HEX_DIGITS) for _ in range(12))
     )
 
@@ -104,9 +105,9 @@ def generate_pincode():
     :return: pincode in format ``xxx-xx-xxx``
     :rtype: bytearray
     """
-    return "{}{}{}-{}{}-{}{}{}".format(*(rand.randint(0, 9) for i in range(8))).encode(
-        "ascii"
-    )
+    return "{}{}{}-{}{}-{}{}{}".format(  # pylint: disable=consider-using-f-string
+        *(rand.randint(0, 9) for i in range(8))
+    ).encode("ascii")
 
 
 def to_base64_str(bytes_input) -> str:
@@ -157,9 +158,16 @@ def hap_type_to_uuid(hap_type):
 
 def to_hap_json(dump_obj):
     """Convert an object to HAP json."""
-    return json.dumps(dump_obj, separators=(",", ":")).encode("utf-8")
+    return orjson.dumps(dump_obj)  # pylint: disable=no-member
 
 
 def to_sorted_hap_json(dump_obj):
     """Convert an object to sorted HAP json."""
-    return json.dumps(dump_obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return orjson.dumps(  # pylint: disable=no-member
+        dump_obj, option=orjson.OPT_SORT_KEYS  # pylint: disable=no-member
+    )
+
+
+def from_hap_json(json_str):
+    """Convert json to an object."""
+    return orjson.loads(json_str)  # pylint: disable=no-member

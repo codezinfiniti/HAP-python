@@ -28,7 +28,7 @@ class MockHAPCrypto:
         self._crypt_in_buffer = bytearray()  # Encrypted buffer
         return decrypted
 
-    def encrypt(self, data):  # pylint: disable=no-self-use
+    def encrypt(self, data):
         """Mock as plaintext."""
         return data
 
@@ -114,7 +114,7 @@ def test_http10_close(driver):
 
     assert writer.call_args_list[0][0][0].startswith(b"HTTP/1.1 200 OK\r\n") is True
     assert len(writer.call_args_list) == 1
-    assert connections == {}
+    assert not connections
     hap_proto.close()
 
 
@@ -143,7 +143,7 @@ def test_invalid_content_length(driver):
         is True
     )
     assert len(writer.call_args_list) == 1
-    assert connections == {}
+    assert not connections
     hap_proto.close()
 
 
@@ -165,7 +165,7 @@ def test_invalid_client_closes_connection(driver):
 
     assert writer.call_args_list[0][0][0].startswith(b"HTTP/1.1 200 OK\r\n") is True
     assert len(writer.call_args_list) == 1
-    assert connections == {}
+    assert not connections
     hap_proto.close()
 
 
