@@ -45,6 +45,7 @@ def test_init(mock_driver):
     acc = camera.Camera(_OPTIONS, mock_driver, "Camera")
 
     management = acc.get_service("CameraRTPStreamManagement")
+    assert management.unique_id is not None
 
     assert (
         management.get_characteristic("SupportedRTPConfiguration").get_value() == "AgEA"
@@ -85,7 +86,7 @@ def test_setup_endpoints(mock_driver):
 
 
 def test_set_selected_stream_start_stop(mock_driver):
-    """Test starting a stream request"""
+    """Test starting a stream request."""
     # mocks for asyncio.Process
     async def communicate():
         return (None, "stderr")

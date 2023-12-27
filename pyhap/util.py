@@ -3,14 +3,18 @@ import base64
 import functools
 import random
 import socket
+from typing import Awaitable, Set
 from uuid import UUID
 
+import async_timeout
 import orjson
 
 from .const import BASE_UUID
 
 ALPHANUM = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 HEX_DIGITS = "0123456789ABCDEF"
+_BACKGROUND_TASKS: Set[asyncio.Task] = set()
+
 
 rand = random.SystemRandom()
 
@@ -35,7 +39,7 @@ def iscoro(func):
     return asyncio.iscoroutinefunction(func)
 
 
-def get_local_address():
+def get_local_address() -> str:
     """
     Grabs the local IP address using a socket.
 
@@ -49,7 +53,7 @@ def get_local_address():
         addr = s.getsockname()[0]
     finally:
         s.close()
-    return addr
+    return str(addr)
 
 
 def long_to_bytes(n):
@@ -135,13 +139,15 @@ async def event_wait(event, timeout):
     :rtype: bool
     """
     try:
-        await asyncio.wait_for(event.wait(), timeout)
+        async with async_timeout.timeout(timeout):
+            await event.wait()
     except asyncio.TimeoutError:
         pass
     return event.is_set()
 
 
-def uuid_to_hap_type(uuid):
+@functools.lru_cache(maxsize=2048)
+def uuid_to_hap_type(uuid: UUID) -> str:
     """Convert a UUID to a HAP type."""
     long_type = str(uuid).upper()
     if not long_type.endswith(BASE_UUID):
@@ -149,6 +155,7 @@ def uuid_to_hap_type(uuid):
     return long_type.split("-", 1)[0].lstrip("0")
 
 
+@functools.lru_cache(maxsize=2048)
 def hap_type_to_uuid(hap_type):
     """Convert a HAP type to a UUID."""
     if "-" in hap_type:
@@ -171,3 +178,11 @@ def to_sorted_hap_json(dump_obj):
 def from_hap_json(json_str):
     """Convert json to an object."""
     return orjson.loads(json_str)  # pylint: disable=no-member
+
+
+def async_create_background_task(func: Awaitable) -> asyncio.Task:
+    """Create a background task and add it to the set of background tasks."""
+    task = asyncio.ensure_future(func)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task

@@ -18,18 +18,18 @@ streaming.
 
 import asyncio
 import functools
-import os
 import ipaddress
 import logging
+import os
 import struct
 from uuid import UUID
 
-from pyhap import RESOURCE_DIR
+import async_timeout
+
+from pyhap import RESOURCE_DIR, tlv
 from pyhap.accessory import Accessory
 from pyhap.const import CATEGORY_CAMERA
-from pyhap.util import to_base64_str, byte_bool
-from pyhap import tlv
-
+from pyhap.util import byte_bool, to_base64_str
 
 SETUP_TYPES = {
     'SESSION_ID': b'\x01',
@@ -441,7 +441,7 @@ class Camera(Accessory):
 
     def _create_stream_management(self, stream_idx, options):
         """Create a stream management service."""
-        management = self.add_preload_service("CameraRTPStreamManagement")
+        management = self.add_preload_service("CameraRTPStreamManagement", unique_id=stream_idx)
         management.configure_char(
             "StreamingStatus",
             getter_callback=lambda: self._get_streaming_status(stream_idx),
@@ -859,8 +859,8 @@ class Camera(Accessory):
             logger.info('[%s] Stopping stream.', session_id)
             try:
                 ffmpeg_process.terminate()
-                _, stderr = await asyncio.wait_for(
-                    ffmpeg_process.communicate(), timeout=2.0)
+                async with async_timeout.timeout(2.0):
+                    _, stderr = await ffmpeg_process.communicate()
                 logger.debug('Stream command stderr: %s', stderr)
             except asyncio.TimeoutError:
                 logger.error(

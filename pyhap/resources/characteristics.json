@@ -32,6 +32,14 @@
       ],
       "UUID": "000000E7-0000-1000-8000-0026BB765291"
    },
+   "ActiveTransitionCount": {
+      "Format": "uint8",
+      "Permissions": [
+         "pr",
+         "ev"
+      ],
+      "UUID": "0000024B-0000-1000-8000-0026BB765291"
+   },
    "AdministratorOnlyAccess": {
       "Format": "bool",
       "Permissions": [
@@ -1318,6 +1326,13 @@
       ],
       "UUID": "00000114-0000-1000-8000-0026BB765291"
    },
+   "SupportedTransitionConfiguration": {
+      "Format": "tlv8",
+      "Permissions": [
+         "pr"
+      ],
+      "UUID": "00000144-0000-1000-8000-0026BB765291"
+   },
    "SwingMode": {
       "Format": "uint8",
       "Permissions": [
@@ -1558,6 +1573,15 @@
          "Fahrenheit": 1
       }
    },
+   "TransitionControl": {
+      "Format": "tlv8",
+      "Permissions": [
+         "pr",
+         "pw",
+         "wr"
+      ],
+      "UUID": "00000143-0000-1000-8000-0026BB765291"
+   },
    "VOCDensity": {
       "Format": "float",
       "Permissions": [
@@ -1640,5 +1664,36 @@
       "maxValue": 100,
       "minValue": 0,
       "unit": "percentage"
+   },
+   "HardwareFinish": {
+      "Format": "tlv8",
+      "Permissions": [
+         "pr"
+      ],
+      "UUID": "0000026C-0000-1000-8000-0026BB765291"
+   },
+   "ConfigurationState": {
+      "Format": "uint16",
+      "Permissions": [
+         "pr",
+         "ev"
+      ],
+      "UUID": "00000263-0000-1000-8000-0026BB765291"
+   },
+   "NFCAccessControlPoint": {
+      "Format": "tlv8",
+      "Permissions": [
+         "pr",
+         "pw",
+         "wr"
+      ],
+      "UUID": "00000264-0000-1000-8000-0026BB765291"
+   },
+   "NFCAccessSupportedConfiguration": {
+      "Format": "tlv8",
+      "Permissions": [
+         "pr"
+      ],
+      "UUID": "00000265-0000-1000-8000-0026BB765291"
    }
 }

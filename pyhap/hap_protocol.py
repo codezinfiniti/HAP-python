@@ -5,6 +5,7 @@ The HAPServerProtocol is a protocol implementation that manages the "TLS" of the
 import asyncio
 import logging
 import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from cryptography.exceptions import InvalidTag
 import h11
@@ -15,6 +16,10 @@ from pyhap.const import HAP_REPR_AID, HAP_REPR_IID
 from .hap_crypto import HAPCrypto
 from .hap_event import create_hap_event
 from .hap_handler import HAPResponse, HAPServerHandler
+from .util import async_create_background_task
+
+if TYPE_CHECKING:
+    from .accessory_driver import AccessoryDriver
 
 logger = logging.getLogger(__name__)
 
@@ -28,29 +33,35 @@ IDLE_CONNECTION_TIMEOUT_SECONDS = 90 * 60 * 60
 
 EVENT_COALESCE_TIME_WINDOW = 0.5
 
+H11_END_OF_MESSAGE = h11.EndOfMessage()
+H11_CONNECTION_CLOSED = h11.ConnectionClosed()
+
 
 class HAPServerProtocol(asyncio.Protocol):
     """A asyncio.Protocol implementing the HAP protocol."""
 
-    def __init__(self, loop, connections, accessory_driver) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        connections: Dict[str, "HAPServerProtocol"],
+        accessory_driver: "AccessoryDriver",
+    ) -> None:
         self.loop = loop
         self.conn = h11.Connection(h11.SERVER)
         self.connections = connections
         self.accessory_driver = accessory_driver
-        self.handler = None
-        self.peername = None
-        self.transport = None
+        self.handler: Optional[HAPServerHandler] = None
+        self.peername: Optional[str] = None
+        self.transport: Optional[asyncio.Transport] = None
 
-        self.request = None
-        self.request_body = None
-        self.response = None
+        self.request: Optional[h11.Request] = None
+        self.request_body: List[bytes] = []
+        self.response: Optional[HAPResponse] = None
 
-        self.last_activity = None
-        self.hap_crypto = None
-        self._event_timer = None
-        self._event_queue = {}
-
-        self.start_time = None
+        self.last_activity: Optional[float] = None
+        self.hap_crypto: Optional[HAPCrypto] = None
+        self._event_timer: Optional[asyncio.TimerHandle] = None
+        self._event_queue: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
     def connection_lost(self, exc: Exception) -> None:
         """Handle connection lost."""
@@ -127,24 +138,29 @@ class HAPServerProtocol(asyncio.Protocol):
             # Force Content-Length as iOS can sometimes
             # stall if it gets chunked encoding
             response.headers.append(("Content-Length", str(body_len)))
+        send = self.conn.send
         self.write(
-            self.conn.send(
-                h11.Response(
-                    status_code=response.status_code,
-                    reason=response.reason,
-                    headers=response.headers,
+            b"".join(
+                (
+                    send(
+                        h11.Response(
+                            status_code=response.status_code,
+                            reason=response.reason,
+                            headers=response.headers,
+                        )
+                    ),
+                    send(h11.Data(data=response.body)),
+                    send(H11_END_OF_MESSAGE),
                 )
             )
-            + self.conn.send(h11.Data(data=response.body))
-            + self.conn.send(h11.EndOfMessage())
         )
 
-    def finish_and_close(self):
+    def finish_and_close(self) -> None:
         """Cleanly finish and close the connection."""
-        self.conn.send(h11.ConnectionClosed())
+        self.conn.send(H11_CONNECTION_CLOSED)
         self.close()
 
-    def check_idle(self, now) -> None:
+    def check_idle(self, now: float) -> None:
         """Abort when do not get any data within the timeout."""
         if self.last_activity + IDLE_CONNECTION_TIMEOUT_SECONDS >= now:
             return
@@ -192,7 +208,7 @@ class HAPServerProtocol(asyncio.Protocol):
             )
         self._process_events()
 
-    def _process_events(self):
+    def _process_events(self) -> None:
         """Process pending events."""
         try:
             while self._process_one_event():
@@ -202,7 +218,7 @@ class HAPServerProtocol(asyncio.Protocol):
         except h11.ProtocolError as protocol_ex:
             self._handle_invalid_conn_state(protocol_ex)
 
-    def _send_events(self):
+    def _send_events(self) -> None:
         """Send any pending events."""
         if self._event_timer:
             self._event_timer.cancel()
@@ -214,7 +230,7 @@ class HAPServerProtocol(asyncio.Protocol):
             self.write(create_hap_event(subscribed_events))
         self._event_queue.clear()
 
-    def _event_queue_with_active_subscriptions(self):
+    def _event_queue_with_active_subscriptions(self) -> List[Dict[str, Any]]:
         """Remove any topics that have been unsubscribed after the event was generated."""
         topics = self.accessory_driver.topics
         return [
@@ -230,32 +246,38 @@ class HAPServerProtocol(asyncio.Protocol):
         logger.debug(
             "%s (%s): h11 Event: %s", self.peername, self.handler.client_uuid, event
         )
-        if event in (h11.NEED_DATA, h11.ConnectionClosed):
+        if event is h11.NEED_DATA:
             return False
 
         if event is h11.PAUSED:
             self.conn.start_next_cycle()
             return True
 
-        if isinstance(event, h11.Request):
+        event_type = type(event)
+        if event_type is h11.ConnectionClosed:
+            return False
+
+        if event_type is h11.Request:
             self.request = event
-            self.request_body = b""
+            self.request_body = []
             return True
 
-        if isinstance(event, h11.Data):
-            self.request_body += event.data
+        if event_type is h11.Data:
+            if TYPE_CHECKING:
+                assert isinstance(event, h11.Data)  # nosec
+            self.request_body.append(event.data)
             return True
 
-        if isinstance(event, h11.EndOfMessage):
-            response = self.handler.dispatch(self.request, bytes(self.request_body))
+        if event_type is h11.EndOfMessage:
+            response = self.handler.dispatch(self.request, b"".join(self.request_body))
             self._process_response(response)
             self.request = None
-            self.request_body = None
+            self.request_body = []
             return True
 
         return self._handle_invalid_conn_state(f"Unexpected event: {event}")
 
-    def _process_response(self, response) -> None:
+    def _process_response(self, response: HAPResponse) -> None:
         """Process a response from the handler."""
         if response.task:
             # If there is a task pending we will schedule
@@ -270,7 +292,7 @@ class HAPServerProtocol(asyncio.Protocol):
             self.hap_crypto = HAPCrypto(response.shared_key)
         # Only update mDNS after sending the response
         if response.pairing_changed:
-            asyncio.ensure_future(
+            async_create_background_task(
                 self.loop.run_in_executor(None, self.accessory_driver.finish_pair)
             )
 
@@ -297,7 +319,7 @@ class HAPServerProtocol(asyncio.Protocol):
             return
         self.send_response(response)
 
-    def _handle_invalid_conn_state(self, message):
+    def _handle_invalid_conn_state(self, message: Exception) -> bool:
         """Log invalid state and close."""
         logger.debug(
             "%s (%s): Invalid state: %s: close the client socket",

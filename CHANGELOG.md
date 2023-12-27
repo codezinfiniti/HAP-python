@@ -16,6 +16,44 @@ Sections
 ### Developers
 -->
 
+## [4.9.1] - 2023-10-25
+
+- Fix handling of explict close. [#467](https://github.com/ikalchev/HAP-python/pull/467)
+
+## [4.9.0] - 2023-10-15
+
+- Hashing of accessories no longer includes their values, resulting in more reliable syncs between
+  devices. [#464](https://github.com/ikalchev/HAP-python/pull/464)
+
+## [4.8.0] - 2023-10-06
+
+- Add AccessoryInformation:HardwareFinish and NFCAccess characteristics/services.
+  [#454](https://github.com/ikalchev/HAP-python/pull/454)
+- Fix handling of multiple pairings. [#456](https://github.com/ikalchev/HAP-python/pull/456)
+- Save raw client username bytes if they are missing on successful pair verify.[#458](https://github.com/ikalchev/HAP-python/pull/458)
+- Add support for Write Responses. [#459](https://github.com/ikalchev/HAP-python/pull/459)
+- Ensure tasks are not garbage-collected before they finish. [#460](https://github.com/ikalchev/HAP-python/pull/460)
+
+## [4.7.1] - 2023-07-31
+
+- Improve encryption performance. [#448](https://github.com/ikalchev/HAP-python/pull/448)
+- Switch timeouts to use `async_timeout`. [#447](https://github.com/ikalchev/HAP-python/pull/447)
+
+## [4.7.0] - 2023-06-18
+
+- Allow passing multiple ip to advertise on to AccessoryDriver. [#442](https://github.com/ikalchev/HAP-python/pull/442)
+- Fix for the new home architecture - retain the original format of the UUID. [#441](https://github.com/ikalchev/HAP-python/pull/441)
+- Add python 3.11 to the CI. [#440](https://github.com/ikalchev/HAP-python/pull/440)
+- Use orjson.loads in loader to speed up startup. [#436](https://github.com/ikalchev/HAP-python/pull/436)
+
+## [4.6.0] - 2022-12-10
+
+- Patch for [WinError 5] Access Denied. [#421](https://github.com/ikalchev/HAP-python/pull/421)
+- Add support for a custom iid manager. [#423](https://github.com/ikalchev/HAP-python/pull/423)
+- Fix pairing with iOS 16. [#424](https://github.com/ikalchev/HAP-python/pull/424)
+- Fix error logging when `get_characteristics` fails. [#425](https://github.com/ikalchev/HAP-python/pull/425)
+- Add necessary support for Adaptive Lightning. [#428](https://github.com/ikalchev/HAP-python/pull/428)
+
 ## [4.5.0] - 2022-06-28
 
 - Speed up "get accessories". [#418](https://github.com/ikalchev/HAP-python/pull/418)
